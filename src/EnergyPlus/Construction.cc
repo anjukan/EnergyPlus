@@ -395,8 +395,6 @@ namespace Construction {
 
         cnd = 1.0 / rs; // Conductivity is the inverse of resistivity
 
-        bool RevConst = false;
-
         if (LayersInConstruct > NumResLayers) {
 
             // One or more are not simple resistive layers so CTFs will have to be
@@ -409,560 +407,495 @@ namespace Construction {
             // previously this loop would go from 1..currentConstructionIndex-1
             // instead of that, we'll loop through the list and stop when we get to the current construction
             // should be the same behavior, we're just checking it by address
-            for (auto & otherConstruction : dataConstruction.Construct) {
-                if (&otherConstruction == this) break;
 
-                // If a source or sink is present in this construction, do not allow any
-                // checks for reversed constructions, i.e., always force EnergyPlus to
-                // calculate CTF/QTFs.  So, don't even check for reversed constructions.
-                if (this->SourceSinkPresent) break; // Constr DO loop
+            // Estimate number of nodes each layer of the construct will require
+            // and calculate the nodal spacing from that
 
-                if (this->TotLayers == otherConstruction.TotLayers) { // Same number of layers--now | check for reversed construct.
+            for (int Layer = 1; Layer <= LayersInConstruct; ++Layer) { // Begin loop thru layers ...
 
-                    RevConst = true;
+                // The calculation of dxn used here is based on a standard stability
+                // criteria for explicit finite difference solutions.  This criteria
+                // was chosen not because it is viewed to be correct, but rather for
+                // lack of any better criteria at this time.  The use of a Fourier
+                // number based criteria such as this is probably physically correct,
+                // though the coefficient (2.0) may not be.
 
-                    for (int Layer = 1; Layer <= this->TotLayers; ++Layer) { // Begin layers loop ...
+                // If this is a "resistive" layer, only need a single node
+                if ((ResLayer(Layer)) && (Layer > 1) && (Layer < LayersInConstruct)) {
+                    Nodes(Layer) = 1;
+                    dx(Layer) = dl(Layer);
+                } else {
+                    dxn = std::sqrt(2.0 * (rk(Layer) / rho(Layer) / cp(Layer)) * this->CTFTimeStep);
 
-                        // RevConst is set to FALSE anytime a mismatch in materials is found.
-                        // This will exit this DO immediately and go on to the next construct
-                        // (if any remain).
+                    ipts1 = int(dl(Layer) / dxn); // number of nodes=thickness/spacing
 
-                        int OppositeLayer = this->TotLayers - Layer + 1;
+                    // Limit the upper and lower bounds of the number of
+                    // nodes to MaxCTFTerms and MinNodes respectively.
 
-                        if (this->LayerPoint(Layer) != otherConstruction.LayerPoint(OppositeLayer)) {
-
-                            RevConst = false;
-                            break; // Layer DO loop
-                        }
-
-                    } // ... end of layers loop.
-
-                    // If the reverse construction isn't used by any surfaces then the CTFs
-                    // still need to be defined.
-                    if (RevConst && !otherConstruction.IsUsedCTF) {
-                        RevConst = false;
+                    if (ipts1 > Construction::MaxCTFTerms) { // Too many nodes
+                        Nodes(Layer) = Construction::MaxCTFTerms;
+                    } else if (ipts1 < MinNodes) { // Too few nodes
+                        Nodes(Layer) = MinNodes;
+                    } else { // Calculated number of nodes ok
+                        Nodes(Layer) = ipts1;
                     }
 
-                    if (RevConst) { // Curent construction is a reverse of
-                        // construction Constr.  Thus, CTFs do not need to be re-
-                        // calculated.  Copy CTF info for construction Constr to
-                        // construction ConstrNum.
-
-                        this->CTFTimeStep = otherConstruction.CTFTimeStep;
-                        this->NumHistories = otherConstruction.NumHistories;
-                        this->NumCTFTerms = otherConstruction.NumCTFTerms;
-
-                        // Transfer the temperature and flux history terms to CTF arrays.
-                        // Loop through the number of CTF history terms ...
-                        for (int HistTerm = 0; HistTerm <= this->NumCTFTerms; ++HistTerm) {
-
-                            this->CTFInside(HistTerm) = otherConstruction.CTFOutside(HistTerm);
-                            this->CTFCross(HistTerm) = otherConstruction.CTFCross(HistTerm);
-                            this->CTFOutside(HistTerm) = otherConstruction.CTFInside(HistTerm);
-                            if (HistTerm != 0) this->CTFFlux(HistTerm) = otherConstruction.CTFFlux(HistTerm);
-
-                        } // ... end of CTF history terms loop.
-
-                        break; // Constr DO loop
-
-                    } // ... end of reversed construction found block
-
-                } // ... end of reversed construct (same number of layers) block.
-
-            } // ... end of construct loop (check reversed--Constr)
-
-            if (!RevConst) { // Calculate CTFs (non-reversed constr)
-
-                // Estimate number of nodes each layer of the construct will require
-                // and calculate the nodal spacing from that
-
-                for (int Layer = 1; Layer <= LayersInConstruct; ++Layer) { // Begin loop thru layers ...
-
-                    // The calculation of dxn used here is based on a standard stability
-                    // criteria for explicit finite difference solutions.  This criteria
-                    // was chosen not because it is viewed to be correct, but rather for
-                    // lack of any better criteria at this time.  The use of a Fourier
-                    // number based criteria such as this is probably physically correct,
-                    // though the coefficient (2.0) may not be.
-
-                    // If this is a "resistive" layer, only need a single node
-                    if ((ResLayer(Layer)) && (Layer > 1) && (Layer < LayersInConstruct)) {
-                        Nodes(Layer) = 1;
-                        dx(Layer) = dl(Layer);
-                    } else {
-                        dxn = std::sqrt(2.0 * (rk(Layer) / rho(Layer) / cp(Layer)) * this->CTFTimeStep);
-
-                        ipts1 = int(dl(Layer) / dxn); // number of nodes=thickness/spacing
-
-                        // Limit the upper and lower bounds of the number of
-                        // nodes to MaxCTFTerms and MinNodes respectively.
-
-                        if (ipts1 > Construction::MaxCTFTerms) { // Too many nodes
-                            Nodes(Layer) = Construction::MaxCTFTerms;
-                        } else if (ipts1 < MinNodes) { // Too few nodes
-                            Nodes(Layer) = MinNodes;
-                        } else { // Calculated number of nodes ok
-                            Nodes(Layer) = ipts1;
-                        }
-
-                        if (this->SolutionDimensions > 1) {
-                            if (ipts1 > Construction::MaxCTFTerms / 2) ipts1 = Construction::MaxCTFTerms / 2;
-                        }
-
-                        dx(Layer) = dl(Layer) / double(Nodes(Layer)); // calc node spacing
+                    if (this->SolutionDimensions > 1) {
+                        if (ipts1 > Construction::MaxCTFTerms / 2) ipts1 = Construction::MaxCTFTerms / 2;
                     }
 
-                } // . .. end of layers in construction loop (calculating #nodes per layer)
-
-                // Determine the total number of nodes (rcmax)
-
-                this->rcmax = 0;
-                for (int Layer = 1; Layer <= LayersInConstruct; ++Layer) {
-                    this->rcmax += Nodes(Layer);
+                    dx(Layer) = dl(Layer) / double(Nodes(Layer)); // calc node spacing
                 }
 
-                // Nodes are placed throughout layers and at the interface between
-                // layers.  As a result, the end layers share a node with the adjacent
-                // layer-leaving one less node total for all layers.
+            } // . .. end of layers in construction loop (calculating #nodes per layer)
 
-                --this->rcmax;
-                if (this->SolutionDimensions > 1) this->rcmax *= NumOfPerpendNodes;
+            // Determine the total number of nodes (rcmax)
 
-                // This section no longer needed as rcmax/number of total nodes is allowed to float.
-                // If reinstated, this node reduction section would have to be modified to account for
-                // the possibility that a 2-D solution is potentially being performed.
-                // Check to see if the maximum number of nodes for the construct has
-                // been exceeded.  Reduce the nodes per layer if necessary, but only
-                // if the number of nodes in a particular layer is greater than the
-                // minimum node limit.
+            this->rcmax = 0;
+            for (int Layer = 1; Layer <= LayersInConstruct; ++Layer) {
+                this->rcmax += Nodes(Layer);
+            }
 
-                //        DO WHILE (rcmax > MaxTotNodes)     ! Begin total node reduction loop ...
+            // Nodes are placed throughout layers and at the interface between
+            // layers.  As a result, the end layers share a node with the adjacent
+            // layer-leaving one less node total for all layers.
 
-                //          rcmax = 0
+            --this->rcmax;
+            if (this->SolutionDimensions > 1) this->rcmax *= NumOfPerpendNodes;
 
-                //          DO Layer = 1, LayersInConstruct   ! Begin layer node reduction ...
+            // This section no longer needed as rcmax/number of total nodes is allowed to float.
+            // If reinstated, this node reduction section would have to be modified to account for
+            // the possibility that a 2-D solution is potentially being performed.
+            // Check to see if the maximum number of nodes for the construct has
+            // been exceeded.  Reduce the nodes per layer if necessary, but only
+            // if the number of nodes in a particular layer is greater than the
+            // minimum node limit.
 
-                //          ! If more nodes than the minimum limit for a layer, reduce the
-                //          ! number of nodes.
+            //        DO WHILE (rcmax > MaxTotNodes)     ! Begin total node reduction loop ...
 
-                //            IF (Nodes(Layer) > MinNodes) THEN
-                //              Nodes(Layer) = Nodes(Layer)-1
-                //              dx(Layer) = dl(Layer)/DBLE(Nodes(Layer)) ! Recalc node spacing
-                //            END IF
+            //          rcmax = 0
 
-                //            rcmax = rcmax + Nodes(Layer) ! Recalculate total number of nodes
+            //          DO Layer = 1, LayersInConstruct   ! Begin layer node reduction ...
 
-                //          END DO        ! ... end of layer loop for node reduction.
+            //          ! If more nodes than the minimum limit for a layer, reduce the
+            //          ! number of nodes.
 
-                //          rcmax = rcmax-1 ! See note above on counting rcmax
+            //            IF (Nodes(Layer) > MinNodes) THEN
+            //              Nodes(Layer) = Nodes(Layer)-1
+            //              dx(Layer) = dl(Layer)/DBLE(Nodes(Layer)) ! Recalc node spacing
+            //            END IF
 
-                //        END DO      ! ... end of total node reduction loop.
+            //            rcmax = rcmax + Nodes(Layer) ! Recalculate total number of nodes
 
-                // For constructions that have sources or sinks present, determine which
-                // node the source/sink is applied at and also where the temperature
-                // calculation has been requested.
-                this->setNodeSourceAndUserTemp(Nodes);
+            //          END DO        ! ... end of layer loop for node reduction.
 
-                // "Adjust time step to ensure stability."  If the time step is too
-                // small, it will result in too many history terms which can lead to
-                // solution instability.  The method used here to determine whether or
-                // not the time step will produce a stable solution is based on a pure
-                // Fourier number calculation (Fo = 1) and has not proven to be
-                // completely effective.  If too many history terms are calculated,
-                // the time step is adjusted and the CTFs end up being recalculated
-                // (see later code in this routine).
+            //          rcmax = rcmax-1 ! See note above on counting rcmax
 
-                dtn = 0.0;
-                this->CTFTimeStep = 0.0;
-                for (int Layer = 1; Layer <= LayersInConstruct; ++Layer) {
-                    if (Nodes(Layer) >= Construction::MaxCTFTerms) {
-                        if (this->SolutionDimensions == 1) {
-                            dtn = rho(Layer) * cp(Layer) * pow_2(dx(Layer)) / rk(Layer);
-                        } else { // 2-D solution requested-->this changes length parameter in Fourier number calculation
-                            dtn = rho(Layer) * cp(Layer) * (pow_2(dx(Layer)) + pow_2(dyn)) / rk(Layer);
-                        }
-                        if (dtn > this->CTFTimeStep) this->CTFTimeStep = dtn;
-                    }
-                }
+            //        END DO      ! ... end of total node reduction loop.
 
-                // If the user defined time step is significantly different than the
-                // calculated time step for this construct, then CTFTimeStep must be
-                // revised.
+            // For constructions that have sources or sinks present, determine which
+            // node the source/sink is applied at and also where the temperature
+            // calculation has been requested.
+            this->setNodeSourceAndUserTemp(Nodes);
 
-                if (std::abs((DataGlobals::TimeStepZone - this->CTFTimeStep) / DataGlobals::TimeStepZone) > 0.1) {
+            // "Adjust time step to ensure stability."  If the time step is too
+            // small, it will result in too many history terms which can lead to
+            // solution instability.  The method used here to determine whether or
+            // not the time step will produce a stable solution is based on a pure
+            // Fourier number calculation (Fo = 1) and has not proven to be
+            // completely effective.  If too many history terms are calculated,
+            // the time step is adjusted and the CTFs end up being recalculated
+            // (see later code in this routine).
 
-                    if (this->CTFTimeStep > DataGlobals::TimeStepZone) {
-
-                        // CTFTimeStep larger than TimeStepZone:  Make sure TimeStepZone
-                        // divides evenly into CTFTimeStep
-                        this->NumHistories = int((this->CTFTimeStep / DataGlobals::TimeStepZone) + 0.5);
-                        this->CTFTimeStep = DataGlobals::TimeStepZone * double(this->NumHistories);
-
-                    } else {
-
-                        // CTFTimeStep smaller than TimeStepZone:  Set to TimeStepZone
-                        this->CTFTimeStep = DataGlobals::TimeStepZone;
-                        this->NumHistories = 1;
-                    }
-                }
-
-                // Calculate the CTFs using the state space method
-                // outlined in Seem's dissertation.  The main matrices
-                // AMat, BMat, CMat, and DMat must be derived from
-                // applying a finite difference network to the layers of
-                // each bldg element.
-
-                // This section must continue looping until the CTFs
-                // calculated here will produce a stable solution (less
-                // history terms than MaxCTFTerms).
-
-                // This first subsection calculates the elements of AMat
-                // which characterizes the heat transfer inside the
-                // building element.
-
-                CTFConvrg = false; // Initialize loop control logical
-
-                this->AExp.allocate(this->rcmax, this->rcmax);
-                this->AExp = 0.0;
-                this->AMat.allocate(this->rcmax, this->rcmax);
-                this->AMat = 0.0;
-                this->AInv.allocate(this->rcmax, this->rcmax);
-                this->AInv = 0.0;
-                this->IdenMatrix.allocate(this->rcmax, this->rcmax);
-                this->IdenMatrix = 0.0;
-                for (int ir = 1; ir <= this->rcmax; ++ir) {
-                    this->IdenMatrix(ir, ir) = 1.0;
-                }
-                this->e.dimension(this->rcmax, 0.0);
-                this->Gamma1.allocate(3, this->rcmax);
-                this->Gamma1 = 0.0;
-                this->Gamma2.allocate(3, this->rcmax);
-                this->Gamma2 = 0.0;
-                this->s.allocate(3, 4, this->rcmax);
-                this->s = 0.0;
-
-                while (!CTFConvrg) { // Begin CTF calculation loop ...
-
-                    this->BMat(3) = 0.0;
-
+            dtn = 0.0;
+            this->CTFTimeStep = 0.0;
+            for (int Layer = 1; Layer <= LayersInConstruct; ++Layer) {
+                if (Nodes(Layer) >= Construction::MaxCTFTerms) {
                     if (this->SolutionDimensions == 1) {
+                        dtn = rho(Layer) * cp(Layer) * pow_2(dx(Layer)) / rk(Layer);
+                    } else { // 2-D solution requested-->this changes length parameter in Fourier number calculation
+                        dtn = rho(Layer) * cp(Layer) * (pow_2(dx(Layer)) + pow_2(dyn)) / rk(Layer);
+                    }
+                    if (dtn > this->CTFTimeStep) this->CTFTimeStep = dtn;
+                }
+            }
 
-                        // Set up intermediate calculations for the first layer.
-                        cap = rho(1) * cp(1) * dx(1);
-                        cap *= 1.5; // For the first node, account for the fact that the
-                        // half-node at the surface results in a "loss" of some
-                        // thermal mass.  Therefore, for simplicity, include it
-                        // at this node.  Same thing done at the last node...
-                        dxtmp = 1.0 / dx(1) / cap;
+            // If the user defined time step is significantly different than the
+            // calculated time step for this construct, then CTFTimeStep must be
+            // revised.
 
-                        this->AMat(1, 1) = -2.0 * rk(1) * dxtmp; // Assign the matrix values for the
-                        this->AMat(2, 1) = rk(1) * dxtmp;        // first node.
-                        this->BMat(1) = rk(1) * dxtmp;           // Assign non-zero value of BMat.
+            if (std::abs((DataGlobals::TimeStepZone - this->CTFTimeStep) / DataGlobals::TimeStepZone) > 0.1) {
 
-                        int Layer = 1; // Initialize the "layer" counter
+                if (this->CTFTimeStep > DataGlobals::TimeStepZone) {
 
-                        int NodeInLayer = 2; // Initialize the node (in a layer) counter (already
-                        // on the second node for the first layer
+                    // CTFTimeStep larger than TimeStepZone:  Make sure TimeStepZone
+                    // divides evenly into CTFTimeStep
+                    this->NumHistories = int((this->CTFTimeStep / DataGlobals::TimeStepZone) + 0.5);
+                    this->CTFTimeStep = DataGlobals::TimeStepZone * double(this->NumHistories);
 
-                        for (int Node = 2; Node <= this->rcmax - 1; ++Node) { // Begin nodes loop (includes all nodes except the
-                            // first/last which have special equations) ...
+                } else {
 
-                            if ((NodeInLayer == Nodes(Layer)) && (LayersInConstruct != 1)) { // For a node at
-                                // the interface between two adjacent layers, the
-                                // capacitance of the node must be calculated from the 2
-                                // halves which may be made up of 2 different materials.
+                    // CTFTimeStep smaller than TimeStepZone:  Set to TimeStepZone
+                    this->CTFTimeStep = DataGlobals::TimeStepZone;
+                    this->NumHistories = 1;
+                }
+            }
 
-                                cap = (rho(Layer) * cp(Layer) * dx(Layer) + rho(Layer + 1) * cp(Layer + 1) * dx(Layer + 1)) * 0.5;
+            // Calculate the CTFs using the state space method
+            // outlined in Seem's dissertation.  The main matrices
+            // AMat, BMat, CMat, and DMat must be derived from
+            // applying a finite difference network to the layers of
+            // each bldg element.
 
-                                this->AMat(Node - 1, Node) = rk(Layer) / dx(Layer) / cap; // Assign matrix
-                                this->AMat(Node, Node) =
-                                        -1.0 * (rk(Layer) / dx(Layer) + rk(Layer + 1) / dx(Layer + 1)) / cap; // values for | the current
-                                this->AMat(Node + 1, Node) = rk(Layer + 1) / dx(Layer + 1) / cap;               // node.
+            // This section must continue looping until the CTFs
+            // calculated here will produce a stable solution (less
+            // history terms than MaxCTFTerms).
 
-                                NodeInLayer = 0; // At an interface, reset nodes in layer counter
-                                ++Layer;         // Also increment the layer counter
+            // This first subsection calculates the elements of AMat
+            // which characterizes the heat transfer inside the
+            // building element.
 
-                            } else { // Standard node within any layer
+            CTFConvrg = false; // Initialize loop control logical
 
-                                cap = rho(Layer) * cp(Layer) * dx(Layer);    // Intermediate
-                                dxtmp = 1.0 / dx(Layer) / cap;               // calculations.
-                                this->AMat(Node - 1, Node) = rk(Layer) * dxtmp;    // Assign matrix
-                                this->AMat(Node, Node) = -2.0 * rk(Layer) * dxtmp; // values for the
-                                this->AMat(Node + 1, Node) = rk(Layer) * dxtmp;    // current node.
+            this->AExp.allocate(this->rcmax, this->rcmax);
+            this->AExp = 0.0;
+            this->AMat.allocate(this->rcmax, this->rcmax);
+            this->AMat = 0.0;
+            this->AInv.allocate(this->rcmax, this->rcmax);
+            this->AInv = 0.0;
+            this->IdenMatrix.allocate(this->rcmax, this->rcmax);
+            this->IdenMatrix = 0.0;
+            for (int ir = 1; ir <= this->rcmax; ++ir) {
+                this->IdenMatrix(ir, ir) = 1.0;
+            }
+            this->e.dimension(this->rcmax, 0.0);
+            this->Gamma1.allocate(3, this->rcmax);
+            this->Gamma1 = 0.0;
+            this->Gamma2.allocate(3, this->rcmax);
+            this->Gamma2 = 0.0;
+            this->s.allocate(3, 4, this->rcmax);
+            this->s = 0.0;
+
+            while (!CTFConvrg) { // Begin CTF calculation loop ...
+
+                this->BMat(3) = 0.0;
+
+                if (this->SolutionDimensions == 1) {
+
+                    // Set up intermediate calculations for the first layer.
+                    cap = rho(1) * cp(1) * dx(1);
+                    cap *= 1.5; // For the first node, account for the fact that the
+                    // half-node at the surface results in a "loss" of some
+                    // thermal mass.  Therefore, for simplicity, include it
+                    // at this node.  Same thing done at the last node...
+                    dxtmp = 1.0 / dx(1) / cap;
+
+                    this->AMat(1, 1) = -2.0 * rk(1) * dxtmp; // Assign the matrix values for the
+                    this->AMat(2, 1) = rk(1) * dxtmp;        // first node.
+                    this->BMat(1) = rk(1) * dxtmp;           // Assign non-zero value of BMat.
+
+                    int Layer = 1; // Initialize the "layer" counter
+
+                    int NodeInLayer = 2; // Initialize the node (in a layer) counter (already
+                    // on the second node for the first layer
+
+                    for (int Node = 2; Node <= this->rcmax - 1; ++Node) { // Begin nodes loop (includes all nodes except the
+                        // first/last which have special equations) ...
+
+                        if ((NodeInLayer == Nodes(Layer)) && (LayersInConstruct != 1)) { // For a node at
+                            // the interface between two adjacent layers, the
+                            // capacitance of the node must be calculated from the 2
+                            // halves which may be made up of 2 different materials.
+
+                            cap = (rho(Layer) * cp(Layer) * dx(Layer) + rho(Layer + 1) * cp(Layer + 1) * dx(Layer + 1)) * 0.5;
+
+                            this->AMat(Node - 1, Node) = rk(Layer) / dx(Layer) / cap; // Assign matrix
+                            this->AMat(Node, Node) =
+                                    -1.0 * (rk(Layer) / dx(Layer) + rk(Layer + 1) / dx(Layer + 1)) / cap; // values for | the current
+                            this->AMat(Node + 1, Node) = rk(Layer + 1) / dx(Layer + 1) / cap;               // node.
+
+                            NodeInLayer = 0; // At an interface, reset nodes in layer counter
+                            ++Layer;         // Also increment the layer counter
+
+                        } else { // Standard node within any layer
+
+                            cap = rho(Layer) * cp(Layer) * dx(Layer);    // Intermediate
+                            dxtmp = 1.0 / dx(Layer) / cap;               // calculations.
+                            this->AMat(Node - 1, Node) = rk(Layer) * dxtmp;    // Assign matrix
+                            this->AMat(Node, Node) = -2.0 * rk(Layer) * dxtmp; // values for the
+                            this->AMat(Node + 1, Node) = rk(Layer) * dxtmp;    // current node.
+                        }
+
+                        ++NodeInLayer; // Increment nodes in layer counter
+                        if (Node == this->NodeSource) this->BMat(3) = 1.0 / cap;
+
+                    } // ... end of nodes loop.
+
+                    // Intermediate calculations for the last node.
+                    cap = rho(LayersInConstruct) * cp(LayersInConstruct) * dx(LayersInConstruct);
+                    cap *= 1.5; // For the last node, account for the fact that the
+                    // half-node at the surface results in a "loss" of some
+                    // thermal mass.  Therefore, for simplicity, include it
+                    // at this node.  Same thing done at the first node...
+                    dxtmp = 1.0 / dx(LayersInConstruct) / cap;
+
+                    this->AMat(this->rcmax, this->rcmax) = -2.0 * rk(LayersInConstruct) * dxtmp; // Assign matrix
+                    this->AMat(this->rcmax - 1, this->rcmax) = rk(LayersInConstruct) * dxtmp;    // values for the
+                    this->BMat(2) = rk(LayersInConstruct) * dxtmp;                   // last node.
+
+                    this->CMat(1) = -rk(1) / dx(1);                                 // Compute the necessary elements
+                    this->CMat(2) = rk(LayersInConstruct) / dx(LayersInConstruct);  // of all other
+                    this->DMat(1) = rk(1) / dx(1);                                  // matrices for the state
+                    this->DMat(2) = -rk(LayersInConstruct) / dx(LayersInConstruct); // space method
+
+                } else { // 2-D solution requested (assign matrices appropriately)
+
+                    // As with the 1-D solution, we are accounting for the thermal mass
+                    // of the half-node at the surface by adding it to the first row
+                    // of interior nodes at both sides of the this->  This is not
+                    // exact, but it does take all of the thermal mass into account.
+                    amatx = rk(1) / (1.5 * rho(1) * cp(1) * dx(1) * dx(1));
+                    amaty = rk(1) / (1.5 * rho(1) * cp(1) * dyn * dyn);
+
+                    // FIRST ROW OF NODES: This first row within the first material layer
+                    // is special in that it is exposed to a boundary condition.  Thus,
+                    // the equations are slightly different.
+                    // Note also that the first and last nodes in a row are slightly
+                    // different from the rest since they are on an adiabatic plane in
+                    // the direction perpendicular to the main direction of heat transfer.
+                    this->AMat(1, 1) = -2.0 * (amatx + amaty);
+                    this->AMat(2, 1) = 2.0 * amaty;
+                    this->AMat(this->NumOfPerpendNodes + 1, 1) = amatx;
+
+                    for (int Node = 2; Node <= this->NumOfPerpendNodes - 1; ++Node) {
+                        this->AMat(Node - 1, Node) = amaty;
+                        this->AMat(Node, Node) = -2.0 * (amatx + amaty);
+                        this->AMat(Node + 1, Node) = amaty;
+                        this->AMat(Node + this->NumOfPerpendNodes, Node) = amatx;
+                    }
+
+                    this->AMat(this->NumOfPerpendNodes, this->NumOfPerpendNodes) = -2.0 * (amatx + amaty);
+                    this->AMat(this->NumOfPerpendNodes - 1, this->NumOfPerpendNodes) = 2.0 * amaty;
+                    this->AMat(this->NumOfPerpendNodes + this->NumOfPerpendNodes, this->NumOfPerpendNodes) = amatx;
+
+                    BMat(1) = amatx;
+
+                    int Layer = 1;
+                    int NodeInLayer = 2;
+                    amatx = rk(1) / (rho(1) * cp(1) * dx(1) * dx(1)); // Reset these to the normal capacitance
+                    amaty = rk(1) / (rho(1) * cp(1) * dyn * dyn);     // Reset these to the normal capacitance
+                    assert(this->NumOfPerpendNodes > 0);                    // Autodesk:F2C++ Loop setup assumption
+                    int const Node_stop(this->rcmax + 1 - 2 * this->NumOfPerpendNodes);
+                    for (int Node = this->NumOfPerpendNodes + 1; Node <= Node_stop; Node += this->NumOfPerpendNodes) {
+                        // INTERNAL ROWS OF NODES: This is the majority of nodes which are all within
+                        // a solid layer and not exposed to a boundary condition.
+                        if ((LayersInConstruct == 1) || (NodeInLayer != Nodes(Layer))) {
+                            // Single material row: This row of nodes are all contained within a material
+                            // and thus there is no special considerations necessary.
+                            if (NodeInLayer == 1) {
+                                // These intermediate variables only need to be reassigned when a new layer is started.
+                                // When this is simply another row of the same material, these have already been assigned correctly.
+                                amatx = rk(Layer) / (rho(Layer) * cp(Layer) * dx(Layer) * dx(Layer));
+                                amaty = rk(Layer) / (rho(Layer) * cp(Layer) * dyn * dyn);
                             }
 
-                            ++NodeInLayer; // Increment nodes in layer counter
-                            if (Node == this->NodeSource) this->BMat(3) = 1.0 / cap;
-
-                        } // ... end of nodes loop.
-
-                        // Intermediate calculations for the last node.
-                        cap = rho(LayersInConstruct) * cp(LayersInConstruct) * dx(LayersInConstruct);
-                        cap *= 1.5; // For the last node, account for the fact that the
-                        // half-node at the surface results in a "loss" of some
-                        // thermal mass.  Therefore, for simplicity, include it
-                        // at this node.  Same thing done at the first node...
-                        dxtmp = 1.0 / dx(LayersInConstruct) / cap;
-
-                        this->AMat(this->rcmax, this->rcmax) = -2.0 * rk(LayersInConstruct) * dxtmp; // Assign matrix
-                        this->AMat(this->rcmax - 1, this->rcmax) = rk(LayersInConstruct) * dxtmp;    // values for the
-                        this->BMat(2) = rk(LayersInConstruct) * dxtmp;                   // last node.
-
-                        this->CMat(1) = -rk(1) / dx(1);                                 // Compute the necessary elements
-                        this->CMat(2) = rk(LayersInConstruct) / dx(LayersInConstruct);  // of all other
-                        this->DMat(1) = rk(1) / dx(1);                                  // matrices for the state
-                        this->DMat(2) = -rk(LayersInConstruct) / dx(LayersInConstruct); // space method
-
-                    } else { // 2-D solution requested (assign matrices appropriately)
-
-                        // As with the 1-D solution, we are accounting for the thermal mass
-                        // of the half-node at the surface by adding it to the first row
-                        // of interior nodes at both sides of the this->  This is not
-                        // exact, but it does take all of the thermal mass into account.
-                        amatx = rk(1) / (1.5 * rho(1) * cp(1) * dx(1) * dx(1));
-                        amaty = rk(1) / (1.5 * rho(1) * cp(1) * dyn * dyn);
-
-                        // FIRST ROW OF NODES: This first row within the first material layer
-                        // is special in that it is exposed to a boundary condition.  Thus,
-                        // the equations are slightly different.
-                        // Note also that the first and last nodes in a row are slightly
-                        // different from the rest since they are on an adiabatic plane in
-                        // the direction perpendicular to the main direction of heat transfer.
-                        this->AMat(1, 1) = -2.0 * (amatx + amaty);
-                        this->AMat(2, 1) = 2.0 * amaty;
-                        this->AMat(this->NumOfPerpendNodes + 1, 1) = amatx;
-
-                        for (int Node = 2; Node <= this->NumOfPerpendNodes - 1; ++Node) {
-                            this->AMat(Node - 1, Node) = amaty;
+                            // Note that the first and last layers in a row are slightly different
+                            // from the rest since they are on an adiabatic plane in the direction
+                            // perpendicular to the main direction of heat transfer.
                             this->AMat(Node, Node) = -2.0 * (amatx + amaty);
-                            this->AMat(Node + 1, Node) = amaty;
+                            this->AMat(Node + 1, Node) = 2.0 * amaty;
+                            this->AMat(Node - this->NumOfPerpendNodes, Node) = amatx;
                             this->AMat(Node + this->NumOfPerpendNodes, Node) = amatx;
-                        }
 
-                        this->AMat(this->NumOfPerpendNodes, this->NumOfPerpendNodes) = -2.0 * (amatx + amaty);
-                        this->AMat(this->NumOfPerpendNodes - 1, this->NumOfPerpendNodes) = 2.0 * amaty;
-                        this->AMat(this->NumOfPerpendNodes + this->NumOfPerpendNodes, this->NumOfPerpendNodes) = amatx;
-
-                        BMat(1) = amatx;
-
-                        int Layer = 1;
-                        int NodeInLayer = 2;
-                        amatx = rk(1) / (rho(1) * cp(1) * dx(1) * dx(1)); // Reset these to the normal capacitance
-                        amaty = rk(1) / (rho(1) * cp(1) * dyn * dyn);     // Reset these to the normal capacitance
-                        assert(this->NumOfPerpendNodes > 0);                    // Autodesk:F2C++ Loop setup assumption
-                        int const Node_stop(this->rcmax + 1 - 2 * this->NumOfPerpendNodes);
-                        for (int Node = this->NumOfPerpendNodes + 1; Node <= Node_stop; Node += this->NumOfPerpendNodes) {
-                            // INTERNAL ROWS OF NODES: This is the majority of nodes which are all within
-                            // a solid layer and not exposed to a boundary condition.
-                            if ((LayersInConstruct == 1) || (NodeInLayer != Nodes(Layer))) {
-                                // Single material row: This row of nodes are all contained within a material
-                                // and thus there is no special considerations necessary.
-                                if (NodeInLayer == 1) {
-                                    // These intermediate variables only need to be reassigned when a new layer is started.
-                                    // When this is simply another row of the same material, these have already been assigned correctly.
-                                    amatx = rk(Layer) / (rho(Layer) * cp(Layer) * dx(Layer) * dx(Layer));
-                                    amaty = rk(Layer) / (rho(Layer) * cp(Layer) * dyn * dyn);
-                                }
-
-                                // Note that the first and last layers in a row are slightly different
-                                // from the rest since they are on an adiabatic plane in the direction
-                                // perpendicular to the main direction of heat transfer.
-                                this->AMat(Node, Node) = -2.0 * (amatx + amaty);
-                                this->AMat(Node + 1, Node) = 2.0 * amaty;
-                                this->AMat(Node - this->NumOfPerpendNodes, Node) = amatx;
-                                this->AMat(Node + this->NumOfPerpendNodes, Node) = amatx;
-
-                                for (int NodeInRow = 2; NodeInRow <= this->NumOfPerpendNodes - 1; ++NodeInRow) {
-                                    int Node2 = Node + NodeInRow - 1;
-                                    this->AMat(Node2 - 1, Node2) = amaty;
-                                    this->AMat(Node2, Node2) = -2.0 * (amatx + amaty);
-                                    this->AMat(Node2 + 1, Node2) = amaty;
-                                    this->AMat(Node2 - this->NumOfPerpendNodes, Node2) = amatx;
-                                    this->AMat(Node2 + this->NumOfPerpendNodes, Node2) = amatx;
-                                }
-
-                                int Node2 = Node - 1 + this->NumOfPerpendNodes;
+                            for (int NodeInRow = 2; NodeInRow <= this->NumOfPerpendNodes - 1; ++NodeInRow) {
+                                int Node2 = Node + NodeInRow - 1;
+                                this->AMat(Node2 - 1, Node2) = amaty;
                                 this->AMat(Node2, Node2) = -2.0 * (amatx + amaty);
-                                this->AMat(Node2 - 1, Node2) = 2.0 * amaty;
+                                this->AMat(Node2 + 1, Node2) = amaty;
                                 this->AMat(Node2 - this->NumOfPerpendNodes, Node2) = amatx;
                                 this->AMat(Node2 + this->NumOfPerpendNodes, Node2) = amatx;
+                            }
 
-                            } else { // Row at a two-layer interface (half of node consists of one layer's materials
-                                // and the other half consist of the next layer's materials)
-                                capavg = 0.5 * (rho(Layer) * cp(Layer) * dx(Layer) + rho(Layer + 1) * cp(Layer + 1) * dx(Layer + 1));
-                                amatx = rk(Layer) / (capavg * dx(Layer));
-                                amatxx = rk(Layer + 1) / (capavg * dx(Layer + 1));
-                                amaty = (rk(Layer) * dx(Layer) + rk(Layer + 1) * dx(Layer + 1)) / (capavg * dyn * dyn);
+                            int Node2 = Node - 1 + this->NumOfPerpendNodes;
+                            this->AMat(Node2, Node2) = -2.0 * (amatx + amaty);
+                            this->AMat(Node2 - 1, Node2) = 2.0 * amaty;
+                            this->AMat(Node2 - this->NumOfPerpendNodes, Node2) = amatx;
+                            this->AMat(Node2 + this->NumOfPerpendNodes, Node2) = amatx;
 
-                                this->AMat(Node, Node) = -amatx - amatxx - 2.0 * amaty;
-                                this->AMat(Node + 1, Node) = 2.0 * amaty;
-                                this->AMat(Node - this->NumOfPerpendNodes, Node) = amatx;
-                                this->AMat(Node + this->NumOfPerpendNodes, Node) = amatxx;
+                        } else { // Row at a two-layer interface (half of node consists of one layer's materials
+                            // and the other half consist of the next layer's materials)
+                            capavg = 0.5 * (rho(Layer) * cp(Layer) * dx(Layer) + rho(Layer + 1) * cp(Layer + 1) * dx(Layer + 1));
+                            amatx = rk(Layer) / (capavg * dx(Layer));
+                            amatxx = rk(Layer + 1) / (capavg * dx(Layer + 1));
+                            amaty = (rk(Layer) * dx(Layer) + rk(Layer + 1) * dx(Layer + 1)) / (capavg * dyn * dyn);
 
-                                for (int NodeInRow = 2; NodeInRow <= this->NumOfPerpendNodes - 1; ++NodeInRow) {
-                                    int Node2 = Node + NodeInRow - 1;
-                                    this->AMat(Node2 - 1, Node2) = amaty;
-                                    this->AMat(Node2, Node2) = -amatx - amatxx - 2.0 * amaty;
-                                    this->AMat(Node2 + 1, Node2) = amaty;
-                                    this->AMat(Node2 - this->NumOfPerpendNodes, Node2) = amatx;
-                                    this->AMat(Node2 + this->NumOfPerpendNodes, Node2) = amatxx;
-                                }
+                            this->AMat(Node, Node) = -amatx - amatxx - 2.0 * amaty;
+                            this->AMat(Node + 1, Node) = 2.0 * amaty;
+                            this->AMat(Node - this->NumOfPerpendNodes, Node) = amatx;
+                            this->AMat(Node + this->NumOfPerpendNodes, Node) = amatxx;
 
-                                int Node2 = Node - 1 + this->NumOfPerpendNodes;
+                            for (int NodeInRow = 2; NodeInRow <= this->NumOfPerpendNodes - 1; ++NodeInRow) {
+                                int Node2 = Node + NodeInRow - 1;
+                                this->AMat(Node2 - 1, Node2) = amaty;
                                 this->AMat(Node2, Node2) = -amatx - amatxx - 2.0 * amaty;
-                                this->AMat(Node2 - 1, Node2) = 2.0 * amaty;
+                                this->AMat(Node2 + 1, Node2) = amaty;
                                 this->AMat(Node2 - this->NumOfPerpendNodes, Node2) = amatx;
                                 this->AMat(Node2 + this->NumOfPerpendNodes, Node2) = amatxx;
-
-                                if (Node == this->NodeSource) BMat(3) = 2.0 * double(this->NumOfPerpendNodes - 1) / capavg;
-                                NodeInLayer = 0;
-                                ++Layer;
                             }
-                            ++NodeInLayer;
+
+                            int Node2 = Node - 1 + this->NumOfPerpendNodes;
+                            this->AMat(Node2, Node2) = -amatx - amatxx - 2.0 * amaty;
+                            this->AMat(Node2 - 1, Node2) = 2.0 * amaty;
+                            this->AMat(Node2 - this->NumOfPerpendNodes, Node2) = amatx;
+                            this->AMat(Node2 + this->NumOfPerpendNodes, Node2) = amatxx;
+
+                            if (Node == this->NodeSource) BMat(3) = 2.0 * double(this->NumOfPerpendNodes - 1) / capavg;
+                            NodeInLayer = 0;
+                            ++Layer;
                         }
-
-                        // LAST ROW OF NODES: Like the first row of nodes, this row is exposed to a boundary
-                        // condition and thus has slightly modified nodal equations.
-
-                        // As with the 1-D solution, we are accounting for the thermal mass
-                        // of the half-node at the surface by adding it to the first row
-                        // of interior nodes at both sides of the this->  This is not
-                        // exact, but it does take all of the thermal mass into account.
-                        amatx /= 1.5;
-                        amaty /= 1.5;
-
-                        int Node = this->rcmax + 1 - this->NumOfPerpendNodes;
-                        this->AMat(Node, Node) = -2.0 * (amatx + amaty);
-                        this->AMat(Node + 1, Node) = 2.0 * amaty;
-                        this->AMat(Node - this->NumOfPerpendNodes, Node) = amatx;
-
-                        for (int thisNode = this->rcmax + 2 - this->NumOfPerpendNodes; thisNode <= this->rcmax - 1; ++thisNode) {
-                            this->AMat(thisNode - 1, thisNode) = amaty;
-                            this->AMat(thisNode, thisNode) = -2.0 * (amatx + amaty);
-                            this->AMat(thisNode + 1, thisNode) = amaty;
-                            this->AMat(thisNode - this->NumOfPerpendNodes, thisNode) = amatx;
-                        }
-
-                        this->AMat(this->rcmax, this->rcmax) = -2.0 * (amatx + amaty);
-                        this->AMat(this->rcmax - 1, this->rcmax) = 2.0 * amaty;
-                        this->AMat(this->rcmax - this->NumOfPerpendNodes, this->rcmax) = amatx;
-
-                        this->BMat(2) = amatx;
-
-                        this->CMat(1) = -rk(1) / dx(1) / double(this->NumOfPerpendNodes - 1);
-                        this->CMat(2) = rk(LayersInConstruct) / dx(LayersInConstruct) / double(this->NumOfPerpendNodes - 1);
-
-                        this->DMat(1) = rk(1) / dx(1) / double(this->NumOfPerpendNodes - 1);
-                        this->DMat(2) = -rk(LayersInConstruct) / dx(LayersInConstruct) / double(this->NumOfPerpendNodes - 1);
+                        ++NodeInLayer;
                     }
 
-                    // Calculation of the CTFs based on the state space
-                    // method.  This process involves finding the exponential
-                    // and inverse of AMat and using these results to
-                    // determine the CTFs.  The Gammas are an intermediate
-                    // calculations which are necessary before the CTFs can
-                    // be computed in TransFuncCoeffs.
-                    DisplayString("Calculating CTFs for \"" + this->Name + "\"");
+                    // LAST ROW OF NODES: Like the first row of nodes, this row is exposed to a boundary
+                    // condition and thus has slightly modified nodal equations.
 
-                    //          CALL DisplayNumberAndString(ConstrNum,'Matrix exponential for Construction #')
-                    this->calculateExponentialMatrix(); // Compute exponential of AMat
+                    // As with the 1-D solution, we are accounting for the thermal mass
+                    // of the half-node at the surface by adding it to the first row
+                    // of interior nodes at both sides of the this->  This is not
+                    // exact, but it does take all of the thermal mass into account.
+                    amatx /= 1.5;
+                    amaty /= 1.5;
 
-                    //          CALL DisplayNumberAndString(ConstrNum,'Invert Matrix for Construction #')
-                    this->calculateInverseMatrix(); // Compute inverse of AMat
+                    int Node = this->rcmax + 1 - this->NumOfPerpendNodes;
+                    this->AMat(Node, Node) = -2.0 * (amatx + amaty);
+                    this->AMat(Node + 1, Node) = 2.0 * amaty;
+                    this->AMat(Node - this->NumOfPerpendNodes, Node) = amatx;
 
-                    //          CALL DisplayNumberAndString(ConstrNum,'Gamma calculation for Construction #')
-                    this->calculateGammas();
-                    // Compute "gamma"s from AMat, AExp, and AInv
-
-                    //          CALL DisplayNumberAndString(ConstrNum,'Compute CTFs for Construction #')
-                    this->calculateFinalCoefficients(); // Compute CTFs
-
-                    // Now check to see if the number of transfer functions
-                    // is greater than MaxCTFTerms.  If it is, then increase the
-                    // time step and the number of history terms and
-                    // recalculate.  Whether or not it will be necessary to
-                    // recalculate the CTFs is controlled by this DO WHILE
-                    // loop and the logical CTFConvrg.
-
-                    CTFConvrg = true; // Assume solution convergence
-
-                    // If too many terms, then solution did not converge.  Increase the
-                    // number of histories and the time step.  Reset CTFConvrg to continue
-                    // the DO loop.
-                    if (this->NumCTFTerms > (Construction::MaxCTFTerms - 1)) {
-                        ++this->NumHistories;
-                        this->CTFTimeStep += DataGlobals::TimeStepZone;
-                        CTFConvrg = false;
+                    for (int thisNode = this->rcmax + 2 - this->NumOfPerpendNodes; thisNode <= this->rcmax - 1; ++thisNode) {
+                        this->AMat(thisNode - 1, thisNode) = amaty;
+                        this->AMat(thisNode, thisNode) = -2.0 * (amatx + amaty);
+                        this->AMat(thisNode + 1, thisNode) = amaty;
+                        this->AMat(thisNode - this->NumOfPerpendNodes, thisNode) = amatx;
                     }
 
-                    // If the number of terms is okay, then do a further check on the summation of
-                    // the various series summations.  In theory, Sum(Xi) = Sum(Yi) = Sum(Zi).  If
-                    // this is not the case, then the terms have not reached a valid solution, and
-                    // we need to increase the number of histories and the time step as above.
-                    if (CTFConvrg) {
-                        SumXi = this->s0(2, 2);
-                        SumYi = this->s0(1, 2);
-                        SumZi = this->s0(1, 1);
-                        for (int HistTerm = 1; HistTerm <= this->NumCTFTerms; ++HistTerm) {
-                            SumXi += this->s(2, 2, HistTerm);
-                            SumYi += this->s(1, 2, HistTerm);
-                            SumZi += this->s(1, 1, HistTerm);
+                    this->AMat(this->rcmax, this->rcmax) = -2.0 * (amatx + amaty);
+                    this->AMat(this->rcmax - 1, this->rcmax) = 2.0 * amaty;
+                    this->AMat(this->rcmax - this->NumOfPerpendNodes, this->rcmax) = amatx;
+
+                    this->BMat(2) = amatx;
+
+                    this->CMat(1) = -rk(1) / dx(1) / double(this->NumOfPerpendNodes - 1);
+                    this->CMat(2) = rk(LayersInConstruct) / dx(LayersInConstruct) / double(this->NumOfPerpendNodes - 1);
+
+                    this->DMat(1) = rk(1) / dx(1) / double(this->NumOfPerpendNodes - 1);
+                    this->DMat(2) = -rk(LayersInConstruct) / dx(LayersInConstruct) / double(this->NumOfPerpendNodes - 1);
+                }
+
+                // Calculation of the CTFs based on the state space
+                // method.  This process involves finding the exponential
+                // and inverse of AMat and using these results to
+                // determine the CTFs.  The Gammas are an intermediate
+                // calculations which are necessary before the CTFs can
+                // be computed in TransFuncCoeffs.
+                DisplayString("Calculating CTFs for \"" + this->Name + "\"");
+
+                //          CALL DisplayNumberAndString(ConstrNum,'Matrix exponential for Construction #')
+                this->calculateExponentialMatrix(); // Compute exponential of AMat
+
+                //          CALL DisplayNumberAndString(ConstrNum,'Invert Matrix for Construction #')
+                this->calculateInverseMatrix(); // Compute inverse of AMat
+
+                //          CALL DisplayNumberAndString(ConstrNum,'Gamma calculation for Construction #')
+                this->calculateGammas();
+                // Compute "gamma"s from AMat, AExp, and AInv
+
+                //          CALL DisplayNumberAndString(ConstrNum,'Compute CTFs for Construction #')
+                this->calculateFinalCoefficients(); // Compute CTFs
+
+                // Now check to see if the number of transfer functions
+                // is greater than MaxCTFTerms.  If it is, then increase the
+                // time step and the number of history terms and
+                // recalculate.  Whether or not it will be necessary to
+                // recalculate the CTFs is controlled by this DO WHILE
+                // loop and the logical CTFConvrg.
+
+                CTFConvrg = true; // Assume solution convergence
+
+                // If too many terms, then solution did not converge.  Increase the
+                // number of histories and the time step.  Reset CTFConvrg to continue
+                // the DO loop.
+                if (this->NumCTFTerms > (Construction::MaxCTFTerms - 1)) {
+                    ++this->NumHistories;
+                    this->CTFTimeStep += DataGlobals::TimeStepZone;
+                    CTFConvrg = false;
+                }
+
+                // If the number of terms is okay, then do a further check on the summation of
+                // the various series summations.  In theory, Sum(Xi) = Sum(Yi) = Sum(Zi).  If
+                // this is not the case, then the terms have not reached a valid solution, and
+                // we need to increase the number of histories and the time step as above.
+                if (CTFConvrg) {
+                    SumXi = this->s0(2, 2);
+                    SumYi = this->s0(1, 2);
+                    SumZi = this->s0(1, 1);
+                    for (int HistTerm = 1; HistTerm <= this->NumCTFTerms; ++HistTerm) {
+                        SumXi += this->s(2, 2, HistTerm);
+                        SumYi += this->s(1, 2, HistTerm);
+                        SumZi += this->s(1, 1, HistTerm);
+                    }
+                    SumXi = std::abs(SumXi);
+                    SumYi = std::abs(SumYi);
+                    SumZi = std::abs(SumZi);
+                    BiggestSum = max(SumXi, SumYi, SumZi);
+                    if (BiggestSum > 0.0) {
+                        if (((std::abs(SumXi - SumYi) / BiggestSum) > MaxAllowedCTFSumError) ||
+                            ((std::abs(SumZi - SumYi) / BiggestSum) > MaxAllowedCTFSumError)) {
+                            ++this->NumHistories;
+                            this->CTFTimeStep += DataGlobals::TimeStepZone;
+                            CTFConvrg = false;
                         }
-                        SumXi = std::abs(SumXi);
-                        SumYi = std::abs(SumYi);
-                        SumZi = std::abs(SumZi);
-                        BiggestSum = max(SumXi, SumYi, SumZi);
-                        if (BiggestSum > 0.0) {
-                            if (((std::abs(SumXi - SumYi) / BiggestSum) > MaxAllowedCTFSumError) ||
-                                ((std::abs(SumZi - SumYi) / BiggestSum) > MaxAllowedCTFSumError)) {
-                                ++this->NumHistories;
-                                this->CTFTimeStep += DataGlobals::TimeStepZone;
-                                CTFConvrg = false;
-                            }
-                        } else { // Something terribly wrong--the surface has no CTFs, not even an R-value
-                            ShowFatalError("Illegal construction definition, no CTFs calculated for " + this->Name);
+                    } else { // Something terribly wrong--the surface has no CTFs, not even an R-value
+                        ShowFatalError("Illegal construction definition, no CTFs calculated for " + this->Name);
+                    }
+                }
+
+                // Once the time step has reached a certain point, it is highly likely that
+                // there is either a problem with the input or the solution.  This should
+                // be extremely rare since other checks should flag most bad user input.
+                // Thus, if the time step reaches a certain point, error out and let the
+                // user know that something needs to be checked in the input file.
+                if (this->CTFTimeStep >= MaxAllowedTimeStep) {
+                    ShowSevereError("CTF calculation convergence problem for Construction=\"" + this->Name + "\".");
+                    ShowContinueError("...with Materials (outside layer to inside)");
+                    ShowContinueError("(outside)=\"" + dataMaterial.Material(this->LayerPoint(1)).Name + "\"");
+                    for (int Layer = 2; Layer <= this->TotLayers; ++Layer) {
+                        if (Layer != this->TotLayers) {
+                            ShowContinueError("(next)=\"" + dataMaterial.Material(this->LayerPoint(Layer)).Name + "\"");
+                        } else {
+                            ShowContinueError("(inside)=\"" + dataMaterial.Material(this->LayerPoint(Layer)).Name + "\"");
                         }
                     }
+                    ShowContinueError(
+                            "The Construction report will be produced. This will show more details on Constructions and their materials.");
+                    ShowContinueError("Attempts will be made to complete the CTF process but the report may be incomplete.");
+                    ShowContinueError("Constructs reported after this construction may appear to have all 0 CTFs.");
+                    ShowContinueError("The potential causes of this problem are related to the input for the construction");
+                    ShowContinueError("listed in the severe error above.  The CTF calculate routine is unable to come up");
+                    ShowContinueError("with a series of CTF terms that have a reasonable time step and this indicates an");
+                    ShowContinueError("error.  Check the definition of this construction and the materials that make up");
+                    ShowContinueError("the this->  Very thin, highly conductive materials may cause problems.");
+                    ShowContinueError("This may be avoided by ignoring the presence of those materials since they probably");
+                    ShowContinueError("do not effect the heat transfer characteristics of the this->  Highly");
+                    ShowContinueError("conductive or highly resistive layers that are alternated with high mass layers");
+                    ShowContinueError("may also result in problems.  After confirming that the input is correct and");
+                    ShowContinueError("realistic, the user should contact the EnergyPlus support team.");
+                    DoCTFErrorReport = true;
+                    ErrorsFound = true;
+                    break;
+                    //            CALL ShowFatalError('Program terminated for reasons listed (InitConductionTransferFunctions) ')
+                }
 
-                    // Once the time step has reached a certain point, it is highly likely that
-                    // there is either a problem with the input or the solution.  This should
-                    // be extremely rare since other checks should flag most bad user input.
-                    // Thus, if the time step reaches a certain point, error out and let the
-                    // user know that something needs to be checked in the input file.
-                    if (this->CTFTimeStep >= MaxAllowedTimeStep) {
-                        ShowSevereError("CTF calculation convergence problem for Construction=\"" + this->Name + "\".");
-                        ShowContinueError("...with Materials (outside layer to inside)");
-                        ShowContinueError("(outside)=\"" + dataMaterial.Material(this->LayerPoint(1)).Name + "\"");
-                        for (int Layer = 2; Layer <= this->TotLayers; ++Layer) {
-                            if (Layer != this->TotLayers) {
-                                ShowContinueError("(next)=\"" + dataMaterial.Material(this->LayerPoint(Layer)).Name + "\"");
-                            } else {
-                                ShowContinueError("(inside)=\"" + dataMaterial.Material(this->LayerPoint(Layer)).Name + "\"");
-                            }
-                        }
-                        ShowContinueError(
-                                "The Construction report will be produced. This will show more details on Constructions and their materials.");
-                        ShowContinueError("Attempts will be made to complete the CTF process but the report may be incomplete.");
-                        ShowContinueError("Constructs reported after this construction may appear to have all 0 CTFs.");
-                        ShowContinueError("The potential causes of this problem are related to the input for the construction");
-                        ShowContinueError("listed in the severe error above.  The CTF calculate routine is unable to come up");
-                        ShowContinueError("with a series of CTF terms that have a reasonable time step and this indicates an");
-                        ShowContinueError("error.  Check the definition of this construction and the materials that make up");
-                        ShowContinueError("the this->  Very thin, highly conductive materials may cause problems.");
-                        ShowContinueError("This may be avoided by ignoring the presence of those materials since they probably");
-                        ShowContinueError("do not effect the heat transfer characteristics of the this->  Highly");
-                        ShowContinueError("conductive or highly resistive layers that are alternated with high mass layers");
-                        ShowContinueError("may also result in problems.  After confirming that the input is correct and");
-                        ShowContinueError("realistic, the user should contact the EnergyPlus support team.");
-                        DoCTFErrorReport = true;
-                        ErrorsFound = true;
-                        break;
-                        //            CALL ShowFatalError('Program terminated for reasons listed (InitConductionTransferFunctions) ')
-                    }
-
-                } // ... end of CTF calculation loop.
-
-            } // ... end of IF block for non-reversed constructs.
+            } // ... end of CTF calculation loop.
 
         } else { // Construct has only resistive layers (no thermal mass).
             // CTF calculation not necessary, overall resistance
@@ -994,65 +927,60 @@ namespace Construction {
                 ErrorsFound = true;
             }
 
-            RevConst = false; // In the code that follows, handle a resistive
-            // layer as a non-reversed this->
-
         } // ... end of resistive construction IF block.
 
         // Transfer the CTFs to the storage arrays for all non-reversed
         // constructions.  This transfer was done earlier in the routine for
         // reversed constructions.
 
-        if (!RevConst) { // If this is either a new construction or a non-
-            // reversed construction, the CTFs must be stored
-            // in the proper arrays.  If this is a reversed
-            // construction, nothing further needs to be done.
+        // If this is either a new construction or a non-
+        // reversed construction, the CTFs must be stored
+        // in the proper arrays.  If this is a reversed
+        // construction, nothing further needs to be done.
 
-            // Copy the CTFs into the storage arrays, converting them back to SI
-            // units in the process.  First the "zero" terms and then the history terms...
-            this->CTFOutside(0) = this->s0(1, 1) * DataConversions::CFU;
-            this->CTFCross(0) = this->s0(1, 2) * DataConversions::CFU;
-            this->CTFInside(0) = -this->s0(2, 2) * DataConversions::CFU;
+        // Copy the CTFs into the storage arrays, converting them back to SI
+        // units in the process.  First the "zero" terms and then the history terms...
+        this->CTFOutside(0) = this->s0(1, 1) * DataConversions::CFU;
+        this->CTFCross(0) = this->s0(1, 2) * DataConversions::CFU;
+        this->CTFInside(0) = -this->s0(2, 2) * DataConversions::CFU;
+        if (this->SourceSinkPresent) {
+            // QTFs...
+            this->CTFSourceOut(0) = this->s0(3, 1);
+            this->CTFSourceIn(0) = this->s0(3, 2);
+            // QTFs for temperature calculation at source/sink location
+            this->CTFTSourceOut(0) = this->s0(1, 3);
+            this->CTFTSourceIn(0) = this->s0(2, 3);
+            this->CTFTSourceQ(0) = this->s0(3, 3) / DataConversions::CFU;
+            if (this->TempAfterLayer != 0) {
+                // QTFs for user specified interior temperature calculations...
+                this->CTFTUserOut(0) = this->s0(1, 4);
+                this->CTFTUserIn(0) = this->s0(2, 4);
+                this->CTFTUserSource(0) = this->s0(3, 4) / DataConversions::CFU;
+            }
+        }
+
+        for (int HistTerm = 1; HistTerm <= this->NumCTFTerms; ++HistTerm) {
+            // "REGULAR" CTFs...
+            this->CTFOutside(HistTerm) = this->s(1, 1, HistTerm) * DataConversions::CFU;
+            this->CTFCross(HistTerm) = this->s(1, 2, HistTerm) * DataConversions::CFU;
+            this->CTFInside(HistTerm) = -this->s(2, 2, HistTerm) * DataConversions::CFU;
+            if (HistTerm != 0) this->CTFFlux(HistTerm) = -e(HistTerm);
             if (this->SourceSinkPresent) {
                 // QTFs...
-                this->CTFSourceOut(0) = this->s0(3, 1);
-                this->CTFSourceIn(0) = this->s0(3, 2);
+                this->CTFSourceOut(HistTerm) = this->s(3, 1, HistTerm);
+                this->CTFSourceIn(HistTerm) = this->s(3, 2, HistTerm);
                 // QTFs for temperature calculation at source/sink location
-                this->CTFTSourceOut(0) = this->s0(1, 3);
-                this->CTFTSourceIn(0) = this->s0(2, 3);
-                this->CTFTSourceQ(0) = this->s0(3, 3) / DataConversions::CFU;
+                this->CTFTSourceOut(HistTerm) = this->s(1, 3, HistTerm);
+                this->CTFTSourceIn(HistTerm) = this->s(2, 3, HistTerm);
+                this->CTFTSourceQ(HistTerm) = this->s(3, 3, HistTerm) / DataConversions::CFU;
                 if (this->TempAfterLayer != 0) {
                     // QTFs for user specified interior temperature calculations...
-                    this->CTFTUserOut(0) = this->s0(1, 4);
-                    this->CTFTUserIn(0) = this->s0(2, 4);
-                    this->CTFTUserSource(0) = this->s0(3, 4) / DataConversions::CFU;
+                    this->CTFTUserOut(HistTerm) = this->s(1, 4, HistTerm);
+                    this->CTFTUserIn(HistTerm) = this->s(2, 4, HistTerm);
+                    this->CTFTUserSource(HistTerm) = this->s(3, 4, HistTerm) / DataConversions::CFU;
                 }
             }
-
-            for (int HistTerm = 1; HistTerm <= this->NumCTFTerms; ++HistTerm) {
-                // "REGULAR" CTFs...
-                this->CTFOutside(HistTerm) = this->s(1, 1, HistTerm) * DataConversions::CFU;
-                this->CTFCross(HistTerm) = this->s(1, 2, HistTerm) * DataConversions::CFU;
-                this->CTFInside(HistTerm) = -this->s(2, 2, HistTerm) * DataConversions::CFU;
-                if (HistTerm != 0) this->CTFFlux(HistTerm) = -e(HistTerm);
-                if (this->SourceSinkPresent) {
-                    // QTFs...
-                    this->CTFSourceOut(HistTerm) = this->s(3, 1, HistTerm);
-                    this->CTFSourceIn(HistTerm) = this->s(3, 2, HistTerm);
-                    // QTFs for temperature calculation at source/sink location
-                    this->CTFTSourceOut(HistTerm) = this->s(1, 3, HistTerm);
-                    this->CTFTSourceIn(HistTerm) = this->s(2, 3, HistTerm);
-                    this->CTFTSourceQ(HistTerm) = this->s(3, 3, HistTerm) / DataConversions::CFU;
-                    if (this->TempAfterLayer != 0) {
-                        // QTFs for user specified interior temperature calculations...
-                        this->CTFTUserOut(HistTerm) = this->s(1, 4, HistTerm);
-                        this->CTFTUserIn(HistTerm) = this->s(2, 4, HistTerm);
-                        this->CTFTUserSource(HistTerm) = this->s(3, 4, HistTerm) / DataConversions::CFU;
-                    }
-                }
-            }
-
-        } // ... end of the reversed construction IF block.
+        }
 
         this->UValue = cnd * DataConversions::CFU;
 
@@ -1985,7 +1913,7 @@ namespace Construction {
             }
         }
     }
-    
+
     bool ConstructionProps::isGlazingConstruction() const
     {
         // SUBROUTINE INFORMATION:
