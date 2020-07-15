@@ -63,6 +63,7 @@
 #include "OutputFiles.hh"
 #include <EnergyPlus/Construction.hh>
 #include <EnergyPlus/CurveManager.hh>
+#include <EnergyPlus/Data/EnergyPlusData.hh>
 #include <EnergyPlus/DataBSDFWindow.hh>
 #include <EnergyPlus/DataComplexFenestration.hh>
 #include <EnergyPlus/DataContaminantBalance.hh>
@@ -89,7 +90,6 @@
 #include <EnergyPlus/EconomicTariff.hh>
 #include <EnergyPlus/General.hh>
 #include <EnergyPlus/GlobalNames.hh>
-#include <EnergyPlus/Data/EnergyPlusData.hh>
 #include <EnergyPlus/HVACSizingSimulationManager.hh>
 #include <EnergyPlus/HeatBalanceIntRadExchange.hh>
 #include <EnergyPlus/HeatBalanceManager.hh>
@@ -360,7 +360,7 @@ namespace HeatBalanceManager {
         ManageEMS(DataGlobals::emsCallFromBeginZoneTimestepBeforeInitHeatBalance, anyRan); // EMS calling point
 
         // These Inits will still have to be looked at as the routines are re-engineered further
-        InitHeatBalance(state.outputFiles);                                                                // Initialize all heat balance related parameters
+        InitHeatBalance(state.dataWindowComplexManager, state.dataWindowEquivalentLayer, state.dataWindowManager, state.outputFiles);                                                                // Initialize all heat balance related parameters
         ManageEMS(DataGlobals::emsCallFromBeginZoneTimestepAfterInitHeatBalance, anyRan); // EMS calling point
 
         // Solve the zone heat balance by first calling the Surface Heat Balance Manager
@@ -446,13 +446,13 @@ namespace HeatBalanceManager {
 
         // FLOW:
 
-        GetProjectControlData(state.outputFiles, ErrorsFound);
+        GetProjectControlData(state, state.outputFiles, ErrorsFound);
 
         GetSiteAtmosphereData(state.outputFiles, ErrorsFound);
 
         GetWindowGlassSpectralData(ErrorsFound);
 
-        GetMaterialData(state.outputFiles, ErrorsFound); // Read materials from input file/transfer from legacy data structure
+        GetMaterialData(state.dataWindowEquivalentLayer, state.outputFiles, ErrorsFound); // Read materials from input file/transfer from legacy data structure
 
         GetFrameAndDividerData(ErrorsFound);
 
@@ -655,7 +655,7 @@ namespace HeatBalanceManager {
         // Construction:InternalSource
     }
 
-    void GetProjectControlData(OutputFiles &outputFiles, bool &ErrorsFound) // Set to true if errors detected during getting data
+    void GetProjectControlData(EnergyPlusData &state, OutputFiles &outputFiles, bool &ErrorsFound) // Set to true if errors detected during getting data
     {
 
         // SUBROUTINE INFORMATION:
@@ -998,10 +998,11 @@ namespace HeatBalanceManager {
                 } else if (SELECT_CASE_var == "MOISTUREPENETRATIONDEPTHCONDUCTIONTRANSFERFUNCTION") {
                     OverallHeatTransferSolutionAlgo = DataSurfaces::HeatTransferModel_EMPD;
                     DataHeatBalance::AnyEMPD = true;
-
+                    DataHeatBalance::AllCTF = false;
                 } else if (SELECT_CASE_var == "CONDUCTIONFINITEDIFFERENCE") {
                     OverallHeatTransferSolutionAlgo = DataSurfaces::HeatTransferModel_CondFD;
                     DataHeatBalance::AnyCondFD = true;
+                    DataHeatBalance::AllCTF = false;
                     if (NumOfTimeStepInHour < 20) {
                         ShowSevereError("GetSolutionAlgorithm: " + CurrentModuleObject + ' ' + cAlphaFieldNames(1) +
                                         " is Conduction Finite Difference but Number of TimeSteps in Hour < 20, Value is " +
@@ -1013,6 +1014,7 @@ namespace HeatBalanceManager {
                 } else if (SELECT_CASE_var == "COMBINEDHEATANDMOISTUREFINITEELEMENT") {
                     OverallHeatTransferSolutionAlgo = DataSurfaces::HeatTransferModel_HAMT;
                     DataHeatBalance::AnyHAMT = true;
+                    DataHeatBalance::AllCTF = false;
                     if (NumOfTimeStepInHour < 20) {
                         ShowSevereError("GetSolutionAlgorithm: " + CurrentModuleObject + ' ' + cAlphaFieldNames(1) +
                                         " is Combined Heat and Moisture Finite Element but Number of TimeSteps in Hour < 20, Value is " +
@@ -1208,7 +1210,7 @@ namespace HeatBalanceManager {
             AlphaName(3) = "NO";
         }
 
-        WindowManager::initWindowModel();
+        WindowManager::initWindowModel(state.dataWindowManager);
 
         static constexpr auto Format_728(
             "! <Zone Air Carbon Dioxide Balance Simulation>, Simulation {{Yes/No}}, Carbon Dioxide Concentration\n");
@@ -1454,7 +1456,7 @@ namespace HeatBalanceManager {
         print(outputFiles.eio, Format_720, SiteWindExp, SiteWindBLHeight, SiteTempGradient);
     }
 
-    void GetMaterialData(OutputFiles &outputFiles, bool &ErrorsFound) // set to true if errors found in input
+    void GetMaterialData(WindowEquivalentLayerData &dataWindowEquivalentLayer, OutputFiles &outputFiles, bool &ErrorsFound) // set to true if errors found in input
     {
 
         // SUBROUTINE INFORMATION:
@@ -1482,28 +1484,16 @@ namespace HeatBalanceManager {
         // material definition.  There are now 10 flavors of materials.  Definitions from
         // the IDD appear below before their counterpart "gets".
 
-        // METHODOLOGY EMPLOYED:
-        // na
-
-        // REFERENCES:
-        // na
-
-        // Using/Aliasing
         using CurveManager::GetCurveIndex;
         using CurveManager::GetCurveMinMaxValues;
         using General::RoundSigDigits;
         using General::ScanForReports;
         using General::TrimSigDigits;
-        using WindowEquivalentLayer::lscNONE;
-        using WindowEquivalentLayer::lscVBNOBM;
-        using WindowEquivalentLayer::lscVBPROF;
 
         // if this has a size, then input has already been gotten
         if (UniqueMaterialNames.size()) {
             return;
         }
-
-        // SUBROUTINE LOCAL VARIABLE DECLARATIONS:
 
         int IOStat;                        // IO Status when calling get input subroutine
         Array1D_string MaterialNames(7);   // Number of Material Alpha names defined
@@ -1546,8 +1536,6 @@ namespace HeatBalanceManager {
         int TotFfactorConstructs; // Number of slabs-on-grade or underground floor constructions defined with F factors
         int TotCfactorConstructs; // Number of underground wall constructions defined with C factors
 
-
-        // FLOW:
         std::string RoutineName("GetMaterialData: ");
 
         RegMat = inputProcessor->getNumObjectsFound("Material");
@@ -3568,11 +3556,11 @@ namespace HeatBalanceManager {
             //  they are used with window shading controls that adjust slat angles like MaximizeSolar or BlockBeamSolar
             if (!lAlphaFieldBlanks(3)) {
                 if (UtilityRoutines::SameString(MaterialNames(3), "FixedSlatAngle")) {
-                    dataMaterial.Material(MaterNum).SlatAngleType = lscNONE;
+                    dataMaterial.Material(MaterNum).SlatAngleType = dataWindowEquivalentLayer.lscNONE;
                 } else if (UtilityRoutines::SameString(MaterialNames(3), "MaximizeSolar")) {
-                    dataMaterial.Material(MaterNum).SlatAngleType = lscVBPROF;
+                    dataMaterial.Material(MaterNum).SlatAngleType = dataWindowEquivalentLayer.lscVBPROF;
                 } else if (UtilityRoutines::SameString(MaterialNames(3), "BlockBeamSolar")) {
-                    dataMaterial.Material(MaterNum).SlatAngleType = lscVBNOBM;
+                    dataMaterial.Material(MaterNum).SlatAngleType = dataWindowEquivalentLayer.lscVBNOBM;
                 } else {
                     dataMaterial.Material(MaterNum).SlatAngleType = 0;
                 }
@@ -5159,7 +5147,7 @@ namespace HeatBalanceManager {
     // Beginning Initialization Section of the Module
     //******************************************************************************
 
-    void InitHeatBalance(OutputFiles &outputFiles)
+    void InitHeatBalance(WindowComplexManagerData &dataWindowComplexManager, WindowEquivalentLayerData &dataWindowEquivalentLayer, WindowManagerData &dataWindowManager, OutputFiles &outputFiles)
     {
 
         // SUBROUTINE INFORMATION:
@@ -5191,26 +5179,10 @@ namespace HeatBalanceManager {
         //  USE DataRoomAirModel, ONLY: IsZoneDV,IsZoneCV,HVACMassFlow, ZoneDVMixedFlag
         using WindowEquivalentLayer::InitEquivalentLayerWindowCalculations;
 
-        // Locals
-        // SUBROUTINE ARGUMENT DEFINITIONS:
-        // na
-
-        // SUBROUTINE PARAMETER DEFINITIONS:
-        // na
-
-        // INTERFACE BLOCK SPECIFICATIONS:
-        // na
-
-        // DERIVED TYPE DEFINITIONS:
-        // na
-
-        // SUBROUTINE LOCAL VARIABLE DECLARATIONS:
         int StormWinNum; // Number of StormWindow object
         int SurfNum;     // Surface number
         int ZoneNum;
         static bool ChangeSet(true); // Toggle for checking storm windows
-
-        // FLOW:
 
         if (BeginSimFlag) {
             AllocateHeatBalArrays(); // Allocate the Module Arrays
@@ -5220,9 +5192,9 @@ namespace HeatBalanceManager {
             }
 
             DisplayString("Initializing Window Optical Properties");
-            InitEquivalentLayerWindowCalculations(); // Initialize the EQL window optical properties
+            InitEquivalentLayerWindowCalculations(dataWindowEquivalentLayer); // Initialize the EQL window optical properties
             // InitGlassOpticalCalculations(); // Initialize the window optical properties
-            InitWindowOpticalCalculations(outputFiles);
+            InitWindowOpticalCalculations(dataWindowComplexManager, dataWindowManager, outputFiles);
             InitDaylightingDevices(OutputFiles::getSingleton()); // Initialize any daylighting devices
             DisplayString("Initializing Solar Calculations");
             InitSolarCalculations(); // Initialize the shadowing calculations
@@ -5290,12 +5262,12 @@ namespace HeatBalanceManager {
                 }
             }
             if (!DetailedSolarTimestepIntegration) {
-                PerformSolarCalculations();
+                PerformSolarCalculations(dataWindowComplexManager);
             }
         }
 
         if (DetailedSolarTimestepIntegration) { // always redo solar calcs
-            PerformSolarCalculations();
+            PerformSolarCalculations(dataWindowComplexManager);
         }
 
         if (BeginDayFlag && !WarmupFlag && KindOfSim == ksRunPeriodWeather && ReportExtShadingSunlitFrac) {
@@ -5938,7 +5910,7 @@ namespace HeatBalanceManager {
             }
 
             UpdateTabularReports(state, OutputProcessor::TimeStepType::TimeStepZone);
-            UpdateUtilityBills();
+            UpdateUtilityBills(state.dataCostEstimateManager);
         } else if (!KickOffSimulation && DoOutputReporting && ReportDuringWarmup) {
             if (BeginDayFlag && !PrintEnvrnStampWarmupPrinted) {
                 PrintEnvrnStampWarmup = true;
