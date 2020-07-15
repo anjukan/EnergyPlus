@@ -49,6 +49,8 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <chrono>
+#include <omp.h>
 
 // ObjexxFCL Headers
 #include <ObjexxFCL/Array.functions.hh>
@@ -9361,9 +9363,19 @@ namespace HeatBalanceManager {
     {
         static bool ErrorsFound(false); // Flag for input error condition
         bool DoCTFErrorReport(false);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::micro> duration(0.0);
+
+        #pragma openmp for
         for (auto & construction : dataConstruction.Construct) {
             construction.calculateTransferFunction(ErrorsFound, DoCTFErrorReport);
+            printf("\tThread No. %d\n", omp_get_thread_num());
         }
+
+        auto stop = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+        std::cout << duration.count() << "\n";
 
         bool DoReport;
         General::ScanForReports("Constructions", DoReport, "Constructions");
