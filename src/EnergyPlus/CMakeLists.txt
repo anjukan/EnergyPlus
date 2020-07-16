@@ -712,10 +712,15 @@ if (WIN32)
   target_link_libraries( energyplusparser Shlwapi )
 endif()
 
+find_package(OpenMP)
+
 # first we will create a static library of EnergyPlus
 # this will be linked statically to create the DLL and also the unit tests
 add_library( energypluslib STATIC ${SRC} )
 target_link_libraries( energypluslib fmt::fmt objexx sqlite bcvtb epexpat epfmiimport re2 DElight libkiva btwxt Windows-CalcEngine airflownetworklib )
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(energypluslib PUBLIC OpenMP::OpenMP_CXX)
+endif()
 if (OPENGL_FOUND)
   target_link_libraries( energypluslib penumbra )
 endif()
