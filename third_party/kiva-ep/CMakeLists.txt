@@ -54,7 +54,7 @@ if( MSVC AND NOT ( CMAKE_CXX_COMPILER_ID STREQUAL "Intel" ) )
 endif()
 
 include_directories( ${kiva_SOURCE_DIR}/src/libkiva/)
-include_directories( SYSTEM ${kiva_SOURCE_DIR}/vendor/boost-1.61.0/)
+include_directories( SYSTEM ${kiva_SOURCE_DIR}/vendor/boost-1.74.0/)
 include_directories( SYSTEM ${kiva_SOURCE_DIR}/vendor/eigen-da9b4e14c255/)
 
 if (KIVA_EXE_BUILD OR KIVA_GROUND_PLOT)
