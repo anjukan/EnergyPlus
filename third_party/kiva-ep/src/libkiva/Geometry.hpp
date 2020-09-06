@@ -6,8 +6,8 @@
 
 #include <boost/geometry.hpp>
 #include <boost/geometry/geometries/geometries.hpp>
-#include <boost/geometry/multi/geometries/multi_point.hpp>
-#include <boost/geometry/multi/geometries/multi_polygon.hpp>
+#include <boost/geometry/geometries/concepts/multi_point_concept.hpp>
+#include <boost/geometry/geometries/concepts/multi_polygon_concept.hpp>
 
 #include "Functions.hpp"
 #include "libkiva_export.h"
